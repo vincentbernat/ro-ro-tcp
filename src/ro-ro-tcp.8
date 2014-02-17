@@ -1,0 +1,113 @@
+.\" Copyright (c) 2014 Vincent Bernat <vbe@deezer.com>
+.\"
+.\" Permission to use, copy, modify, and/or distribute this software for any
+.\" purpose with or without fee is hereby granted, provided that the above
+.\" copyright notice and this permission notice appear in all copies.
+.\"
+.\" THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+.\" WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+.\" MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+.\" ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+.\" WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+.\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+.\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+.\"
+.Dd January 30, 2014
+.Dt RO-RO-TCP 8
+.Os
+.Sh NAME
+.Nm ro-ro-tcp
+.Nd performance enhancing proxy for TCP
+.Sh SYNOPSIS
+.Nm
+.Op Fl d | Fl -debug
+.Op Fl D Ar debug
+.Op Fl l | Fl -listen Ar queue
+.Fl r | Fl -relay
+.Ar local : Ns Ar lport
+.Ar remote : Ns Ar rport
+.Nm
+.Op Fl dv
+.Op Fl D Ar debug
+.Op Fl l | Fl -listen Ar queue
+.Fl p | Fl -proxy
+.Op Fl z | Fl -connections Ar n
+.Ar local : Ns Ar lport
+.Ar remote : Ns Ar rport
+.Sh DESCRIPTION
+.Nm
+is a performance enhancing proxy for TCP. The main idea is to split a
+TCP connection over several connections to achieve higher bandwidth
+over links with high latency and moderate error rates.
+.Pp
+It operates using a client/server model. To avoid confusion, the
+server part is called the relay and the client part is called the
+proxy. The following steps are followed:
+.Bl -bullet
+.It
+A client will connect to the proxy.
+.It
+The proxy will establish several TCP connections to the relay.
+.It
+The relay will establish a TCP connection to the target server.
+.It
+Any data sent by the client to the proxy will be forwarded to the
+relay through the established TCP connections. Once received by the
+relay, the data will be reordered appropriately and sent to the target
+server.
+.El
+.Pp
+.Nm
+can act as a proxy or as a relay. The behaviour is controlled by
+.Fl r
+and
+.Fl p
+flags. Exactly one of them should be specified:
+.Bl -tag -width Ds
+.It Fl r | Fl -relay
+Act as a relay.
+.Ar remote : Ns Ar rport
+is the address and port to bind to for the proxy to connect while
+.Ar local : Ns Ar lport
+is the address and port of the server to relay data to.
+.It Fl p | Fl -proxy
+Act as a proxy.
+.Ar local : Ns Ar lport
+is the address and port to bind to for the client to connect while
+.Ar remote : Ns Ar rport
+is the address and port of the remote relay.
+.El
+.Pp
+When acting as a proxy, the following options are allowed:
+.Bl -tag -width Ds
+.It Fl z | Fl -connections Ar n
+Specify how many connections to open with the relay. The default value
+is 4.
+.El
+.Pp
+The other general options are as follows:
+.Bl -tag -width Ds
+.It Fl l | Fl -listen
+How many connections can be queued in the listen queue. The default is
+20.
+.It Fl d | Fl -debug
+Be more verbose.
+This option can be repeated twice to enable debug mode.
+Debug messages can then be filtered with the
+.Fl D
+flag.
+.It Fl D Ar debug
+This option allows the user to filter out debugging information by
+specifying allowed tokens.
+This option can be repeated several times to allow several tokens.
+This option must be combined with the
+.Fl d
+flag to have some effect.
+Only debugging logs can be filtered.
+.El
+.Sh AUTHORS
+.An -nosplit
+The
+.Nm
+program was written by
+.An Vincent Bernat Aq vbe@deezer.com .
