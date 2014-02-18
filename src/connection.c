@@ -109,6 +109,7 @@ incoming_write(struct bufferevent *bev, void *arg)
 			incoming_destroy(incoming, true);
 			return;
 		}
+		event_add(local->event->write, NULL); /* Check if we are connected */
 		local->group_id = incoming->id;
 		TAILQ_INSERT_TAIL(&cfg->locals, local, next);
 	}
@@ -121,6 +122,12 @@ incoming_write(struct bufferevent *bev, void *arg)
 		local_destroy(local);
 		return;
 	}
+	remote->connected = true;
+
+	/* See `local_data_cb()` in `forward.c` */
+	if (local->connected) event_add(remote->event->read, NULL);
+
+	bufferevent_free(incoming->bev); free(incoming);
 	TAILQ_INSERT_TAIL(&local->remotes, remote, next);
 }
 
@@ -129,13 +136,32 @@ incoming_event(struct bufferevent *bev, short what, void *arg)
 {
 	struct incoming_connection *incoming = arg;
 	if (what & (BEV_EVENT_EOF|BEV_EVENT_ERROR|BEV_EVENT_TIMEOUT)) {
-		log_info("connection",
+		log_warn("connection",
 		    "incoming connection with [%s]:%s aborted before completion",
 		    incoming->addr, incoming->serv);
 		incoming_destroy(incoming, true);
 		return;
 	}
 }
+
+/**
+ * Open a connection to remote.
+ */
+int
+connection_open(struct ro_cfg *cfg, struct ro_local *local)
+{
+	struct ro_remote *remote = NULL;
+	char raddr[INET6_ADDRSTRLEN] = {};
+	char rserv[SERVSTRLEN] = {};
+	int sfd;
+	if ((sfd = endpoint_connect(cfg->remote, raddr, rserv)) == -1 ||
+	    (remote = remote_init(cfg, local, sfd, raddr, rserv)) == NULL)
+		return -1;
+	event_add(remote->event->write, NULL); /* Check if we are connected */
+	TAILQ_INSERT_TAIL(&local->remotes, remote, next);
+	return 0;
+}
+
 
 /**
  * Called when a new client connects.
@@ -149,12 +175,11 @@ client_accept_cb(struct evconnlistener *listener,
 	char addr[INET6_ADDRSTRLEN] = {};
 	char serv[SERVSTRLEN] = {};
 	getnameinfo(address, socklen,
-	    addr, sizeof(addr),
-	    serv, sizeof(serv),
+	    addr, INET6_ADDRSTRLEN,
+	    serv, SERVSTRLEN,
 	    NI_NUMERICHOST | NI_NUMERICSERV);
 	log_info("connection", "accepting connection from [%s]:%s", addr, serv);
 
-	struct ro_remote *remote = NULL;
 	struct ro_local  *local  = NULL;
 	struct incoming_connection *incoming = NULL;
 
@@ -162,18 +187,14 @@ client_accept_cb(struct evconnlistener *listener,
 	case ROLE_PROXY:
 		/* We setup this new local endpoint */
 		local = local_init(cfg, fd, addr, serv);
+		local->connected = true;
 		fd = -1;
 		if (local == NULL) goto error;
 		TAILQ_INSERT_TAIL(&cfg->locals, local, next);
 
 		/* We open the first connection to remote */
-		char raddr[INET6_ADDRSTRLEN] = {};
-		char rserv[SERVSTRLEN] = {};
-		int sfd;
-		if ((sfd = endpoint_connect(cfg->remote, raddr, rserv)) == -1 ||
-		    (remote = remote_init(cfg, local, sfd, raddr, rserv)) == NULL)
+		if (connection_open(cfg, local) == -1)
 			goto error;
-		TAILQ_INSERT_TAIL(&local->remotes, remote, next);
 		return;
 
 	case ROLE_RELAY:
@@ -227,6 +248,27 @@ client_accept_error_cb(struct evconnlistener *listener,
 }
 
 /**
+ * Callback when a remote connection has been established. We need to open the
+ * other ones.
+ */
+void
+connection_established(struct ro_local *local, struct ro_remote *remote)
+{
+	struct ro_cfg *cfg = local->cfg;
+	int n = 0;
+	struct ro_remote *other;
+	TAILQ_FOREACH(other, &local->remotes, next) n++;
+	while (cfg->conns > n++) {
+		if (connection_open(cfg, local) == -1) {
+			log_warnx("connection",
+			    "unable to open a new remote connection");
+			local_destroy(local);
+			return;
+		}
+	}
+}
+
+/**
  * Listen for new connections
  */
 int
@@ -239,8 +281,8 @@ connection_listen(struct ro_cfg *cfg)
 
 	for (la = listenaddr; la != NULL; la = la->ai_next) {
 		getnameinfo(la->ai_addr, la->ai_addrlen,
-		    addr, sizeof(addr),
-		    serv, sizeof(serv),
+		    addr, INET6_ADDRSTRLEN,
+		    serv, SERVSTRLEN,
 		    NI_NUMERICHOST | NI_NUMERICSERV); /* cannot fail */
 		log_debug("connection", "try to bind and listen to [%s]:%s", addr, serv);
 

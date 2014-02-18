@@ -29,6 +29,8 @@ remote_destroy(struct ro_remote *remote)
 {
 	if (!remote) return;
 	struct ro_local *local = remote->local;
+	log_debug("endpoint", "destroy remote [%s]:%s",
+	    remote->addr, remote->serv);
 
 	if (remote->event) {
 		event_close_and_free(remote->event->read);
@@ -50,6 +52,8 @@ local_destroy(struct ro_local *local)
 {
 	if (!local) return;
 	struct ro_cfg *cfg = local->cfg;
+	log_debug("endpoint", "destroy local [%s]:%s",
+	    local->addr, local->serv);
 
 	/* Close all remotes */
 	struct ro_remote *re, *re_next;
@@ -85,8 +89,8 @@ endpoint_connect(struct addrinfo *rem,
 	struct addrinfo *re;
 	for (re = rem; re != NULL; re = re->ai_next) {
 		getnameinfo(re->ai_addr, re->ai_addrlen,
-		    addr, sizeof(addr),
-		    serv, sizeof(serv),
+		    addr, INET6_ADDRSTRLEN,
+		    serv, SERVSTRLEN,
 		    NI_NUMERICHOST | NI_NUMERICSERV); /* cannot fail */
 		log_debug("endpoint", "try to connect to [%s]:%s", addr, serv);
 		if ((sfd = socket(re->ai_family, re->ai_socktype, re->ai_protocol)) == -1)
@@ -120,7 +124,7 @@ remote_init(struct ro_cfg *cfg, struct ro_local *local, int sfd,
 		goto error;
 	}
 
-	int sfd2 = -1, err;
+	int sfd2 = -1;
 
 	remote->cfg = cfg;
 	remote->local = local;
@@ -145,9 +149,6 @@ remote_init(struct ro_cfg *cfg, struct ro_local *local, int sfd,
 		log_warnx("remote", "unable to allocate events for new remote");
 		goto error;
 	}
-	/* To check if we are connected, we need to wait for the socket to be
-	 * ready for write */
-	event_add(remote->event->write, NULL);
 	return remote;
 
 error:

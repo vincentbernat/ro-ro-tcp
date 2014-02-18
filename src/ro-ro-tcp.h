@@ -73,7 +73,8 @@ int  endpoint_connect(struct addrinfo *,
 /* connection.c */
 struct local_private;
 struct remote_private;
-int connection_listen(struct ro_cfg *cfg);
+int connection_listen(struct ro_cfg *);
+void connection_established(struct ro_local *, struct ro_remote *);
 
 /* forward.c */
 void remote_data_cb(evutil_socket_t, short, void *);
@@ -116,7 +117,7 @@ struct ro_local {
 	TAILQ_ENTRY(ro_local) next;
 
 	struct ro_cfg *cfg;
-	bool ready;
+	bool connected;
 
 	/* To display messages about this local endpoint */
 	char addr[INET6_ADDRSTRLEN];

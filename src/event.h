@@ -43,7 +43,8 @@ struct local_private {
 		size_t nw;		/* Number of bytes in write pipe */
 	} pipe;
 
-	struct ro_remote *current_remote; /* We are currently sending to this remote */
+	struct ro_remote *current_send_remote; /* We are currently sending to this remote */
+	struct ro_remote *current_receive_remote; /* We are currently receiving from this remote */
 	uint32_t remaining_bytes;	  /* We need to send this many bytes */
 	size_t partial_bytes;		  /* But before that, we only wrote this many bytes for the header */
 
