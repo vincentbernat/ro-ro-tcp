@@ -35,6 +35,15 @@ levent_log_cb(int severity, const char *msg)
 }
 
 static void
+levent_dump(evutil_socket_t fd, short what, void *arg)
+{
+	struct ro_cfg *cfg = arg;
+	struct ro_local *local;
+	TAILQ_FOREACH(local, &cfg->locals, next)
+	    local_debug(local);
+}
+
+static void
 levent_stop(evutil_socket_t fd, short what, void *arg)
 {
         struct event_base *base = arg;
@@ -74,6 +83,9 @@ event_configure(struct ro_cfg *cfg)
 	evsignal_add(cfg->event->signals.sigterm = evsignal_new(cfg->event->base,
 		SIGTERM, levent_stop, cfg->event->base),
 	    NULL);
+	evsignal_add(cfg->event->signals.sigusr1 = evsignal_new(cfg->event->base,
+		SIGUSR1, levent_dump, cfg),
+	    NULL);
 
 	return connection_listen(cfg);
 }
@@ -107,6 +119,8 @@ event_shutdown(struct ro_cfg *cfg)
 			event_free(cfg->event->signals.sigint);
 		if (cfg->event->signals.sigterm)
 			event_free(cfg->event->signals.sigterm);
+		if (cfg->event->signals.sigusr1)
+			event_free(cfg->event->signals.sigusr1);
 
 		/* Remove all local endpoints */
 		struct ro_local *local, *local_next;

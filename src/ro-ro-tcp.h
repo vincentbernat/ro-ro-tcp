@@ -69,6 +69,8 @@ void remote_destroy(struct ro_remote *);
 void local_destroy(struct ro_local *);
 int  endpoint_connect(struct addrinfo *,
     char[static INET6_ADDRSTRLEN], char[static SERVSTRLEN]);
+void remote_debug(struct ro_remote *);
+void local_debug(struct ro_local *);
 
 /* connection.c */
 struct local_private;

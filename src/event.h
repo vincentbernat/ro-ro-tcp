@@ -30,6 +30,7 @@ struct event_private {
 	struct {
 		struct event *sigint;
 		struct event *sigterm;
+		struct event *sigusr1;
 	} signals;
 };
 

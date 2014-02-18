@@ -18,8 +18,77 @@
 #include "ro-ro-tcp.h"
 #include "event.h"
 
+#include <inttypes.h>
 #include <errno.h>
 #include <string.h>
+
+/**
+ * Dump information about a remote.
+ */
+void
+remote_debug(struct ro_remote *remote)
+{
+	log_info("endpoint",
+	    "remote [%s]:%s:\n"
+	    "  connected: %s\n"
+	    "  in:        %-10zu bytes   out: %-10zu bytes\n"
+	    "  read:      %-10s       write: %-10s\n"
+	    "  header: %zu (out of %zu)\n"
+	    "  serial: %"PRIu32"\n"
+	    "  to receive: %"PRIu32" bytes\n",
+	    remote->addr, remote->serv,
+	    remote->connected?"yes":"no",
+	    remote->stats.in, remote->stats.out,
+	    event_pending(remote->event->read, EV_READ, NULL)?"wait":"no",
+	    event_pending(remote->event->write, EV_WRITE, NULL)?"wait":"no",
+	    remote->event->partial_bytes, 2*sizeof(uint32_t),
+	    (remote->event->partial_bytes == 2*sizeof(uint32_t))?remote->event->partial_header[0]:0,
+	    remote->event->remaining_bytes);
+}
+
+/**
+ * Dump information about a local endpoint.
+ */
+void
+local_debug(struct ro_local *local)
+{
+	log_info("endpoint",
+	    "local [%s]:%s:\n"
+	    "  connected: %s\n"
+	    "  in:        %-10zu bytes   out: %-10zu bytes\n"
+	    "\n"
+	    "  socket:     read:  %-7s    write: %-7s\n"
+	    "  read pipe:  read:  %-7s    write: %-7s   bytes: %-10zu\n"
+	    "  write pipe: read:  %-7s    write: %-7s   bytes: %-10zu\n"
+	    "\n"
+	    "  remote: sending to [%s]%s%s, receiving from [%s]%s%s\n"
+	    "  serial: sending %"PRIu32", receiving %"PRIu32"\n"
+	    "  to receive: %"PRIu32" bytes (+ %zu bytes of header)\n",
+	    local->addr, local->serv,
+	    local->connected?"yes":"no",
+	    local->stats.in, local->stats.out,
+	    event_pending(local->event->read, EV_READ, NULL)?"wait":"no",
+	    event_pending(local->event->write, EV_WRITE, NULL)?"wait":"no",
+	    event_pending(local->event->pipe.read[0], EV_READ, NULL)?"wait":"no",
+	    event_pending(local->event->pipe.read[1], EV_WRITE, NULL)?"wait":"no",
+	    local->event->pipe.nr,
+	    event_pending(local->event->pipe.write[0], EV_READ, NULL)?"wait":"no",
+	    event_pending(local->event->pipe.write[1], EV_WRITE, NULL)?"wait":"no",
+	    local->event->pipe.nw,
+	    local->event->current_send_remote?local->event->current_send_remote->addr:"none",
+	    local->event->current_send_remote?":":"",
+	    local->event->current_send_remote?local->event->current_send_remote->serv:"",
+	    local->event->current_receive_remote?local->event->current_receive_remote->addr:"none",
+	    local->event->current_receive_remote?":":"",
+	    local->event->current_receive_remote?local->event->current_receive_remote->serv:"",
+	    local->event->send_serial, local->event->receive_serial,
+	    local->event->remaining_bytes,
+	    2*sizeof(uint32_t) - local->event->partial_bytes);
+
+	struct ro_remote *remote;
+	TAILQ_FOREACH(remote, &local->remotes, next)
+	    remote_debug(remote);
+}
 
 /**
  * Destroy a remote endpoint
