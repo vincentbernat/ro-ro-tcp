@@ -127,10 +127,11 @@ remote_splice_out(struct ro_remote *remote)
 			}
 			if (errno == EAGAIN || errno == EWOULDBLOCK) {
 				if (local->event->pipe.nr > 0) {
-					/* The pipe is not empty. Wait for room */
+					/* The pipe is not empty. Wait to write to remote */
 					event_add(remote->event->write, NULL);
 					event_del(local->event->pipe.read[0]);
 				} else {
+					/* The pipe is empty, just stop writing */
 					event_add(local->event->pipe.read[0], NULL);
 					event_del(remote->event->write);
 				}
@@ -148,6 +149,8 @@ remote_splice_out(struct ro_remote *remote)
 		remote->stats.out += n;
 		local->event->remaining_bytes -= n;
 		local->event->pipe.nr -= n;
+		/* We can push more data to read pipe */
+		event_add(local->event->read, NULL);
 	}
 	tcp_cork_set(event_get_fd(remote->event->write), 0);
 	return 1;
@@ -208,8 +211,11 @@ remote_splice_in(struct ro_remote *remote)
 			}
 			if (errno == EAGAIN || errno == EWOULDBLOCK) {
 				if (local->event->pipe.nw > 0) {
-					/* Maybe the output pipe is full? */
-					event_add(local->event->pipe.write[1], NULL);
+					/* We cannot know if the output is full,
+					 * but we know there is something here
+					 * and we will trigger an event when
+					 * more room become available. */
+					event_del(local->event->pipe.write[1]);
 					event_del(remote->event->read);
 				} else {
 					event_add(remote->event->read, NULL);
@@ -280,14 +286,18 @@ local_splice_in(struct ro_local *local)
 				 * is full. It's difficult to know. Let's assume
 				 * the pipe is full if we have data in it */
 				if (local->event->pipe.nr > 0) {
-					/* No room to write, stop reading wait for write */
+					/* We know the pipe is not empty but we
+					 * don't know if it is full. Let's pause
+					 * and resume once we emptied a bit the
+					 * pipe */
 					event_del(local->event->read);
-					event_add(local->event->pipe.read[1], NULL);
-					return;
+					event_del(local->event->pipe.read[1]);
+				} else {
+					/* The pipe is empty, hence we don't
+					 * have data to feed it */
+					event_del(local->event->pipe.read[1]);
+					event_add(local->event->read, NULL);
 				}
-				/* Nothing to read. Stop writing, start reading */
-				event_del(local->event->pipe.read[1]);
-				event_add(local->event->read, NULL);
 				return;
 			}
 			if (errno == ENOSYS || errno == EINVAL) {
@@ -329,14 +339,14 @@ local_splice_out(struct ro_local *local)
 				return;
 			}
 			if (errno == EAGAIN || errno == EWOULDBLOCK) {
-				/* We know we have data in pipe. So, we cannot write anymore. */
 				if (local->event->pipe.nw > 0) {
+					/* We know we have data in pipe. So, we cannot write anymore. */
 					event_add(local->event->write, NULL);
 					event_del(local->event->pipe.write[0]);
-					return;
+				} else {
+					event_add(local->event->pipe.write[0], NULL);
+					event_del(local->event->write);
 				}
-				event_add(local->event->pipe.write[0], NULL);
-				event_del(local->event->write);
 				return;
 			}
 			if (errno == ENOSYS || errno == EINVAL) {
@@ -350,7 +360,9 @@ local_splice_out(struct ro_local *local)
 		}
 		local->stats.in += n;
 		local->event->pipe.nw -= n;
-		event_add(local->event->write, NULL);
+		/* We can push more data to write pipe. */
+		if (local->event->current_receive_remote)
+			event_add(local->event->current_receive_remote->event->read, NULL);
 	}
 	if (local->event->pipe.nw == 0)
 		event_del(local->event->pipe.write[0]);
