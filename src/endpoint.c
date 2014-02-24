@@ -41,8 +41,8 @@ remote_debug(struct ro_remote *remote)
 	    remote->stats.in, remote->stats.out,
 	    event_pending(remote->event->read, EV_READ, NULL)?"wait":"no",
 	    event_pending(remote->event->write, EV_WRITE, NULL)?"wait":"no",
-	    remote->event->partial_bytes, 2*sizeof(uint32_t),
-	    (remote->event->partial_bytes == 2*sizeof(uint32_t))?remote->event->partial_header[0]:0,
+	    remote->event->partial_bytes, 2*sizeof(uint16_t),
+	    (remote->event->partial_bytes == 2*sizeof(uint16_t))?remote->event->partial_header[0]:0,
 	    remote->event->remaining_bytes);
 }
 
@@ -79,7 +79,7 @@ local_debug(struct ro_local *local)
 	    local->event->current_receive_remote?local->event->current_receive_remote->serv:"",
 	    local->event->send_serial, local->event->receive_serial,
 	    local->event->remaining_bytes,
-	    2*sizeof(uint32_t) - local->event->partial_bytes);
+	    2*sizeof(uint16_t) - local->event->partial_bytes);
 
 	struct ro_remote *remote;
 	TAILQ_FOREACH(remote, &local->remotes, next)

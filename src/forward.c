@@ -44,10 +44,10 @@ remote_prepare_sending(struct ro_remote *remote, size_t many, size_t partial)
 {
 	/* Our header is quite simple: the serial, the size of the buffer we
 	 * want to transmit. */
-	uint32_t buf[2] = { htonl(remote->local->event->send_serial), htonl(many) };
+	uint16_t buf[2] = { htons(remote->local->event->send_serial), htons(many) };
 	ssize_t n;
 	while ((n = write(event_get_fd(remote->event->write),
-		    ((char *)buf) + (sizeof(uint32_t)*2 - partial), partial)) <= 0) {
+		    ((char *)buf) + (sizeof(uint16_t)*2 - partial), partial)) <= 0) {
 		if (errno == EINTR) continue;
 		if (n == 0) {
 			log_debug("remote", "connection to [%s]:%s was closed",
@@ -78,7 +78,7 @@ remote_prepare_receiving(struct ro_remote *remote, size_t partial)
 	ssize_t n;
 	while ((n = read(event_get_fd(remote->event->read),
 		    (char *)remote->event->partial_header + partial,
-		    sizeof(uint32_t)*2 - partial)) <= 0) {
+		    sizeof(uint16_t)*2 - partial)) <= 0) {
 		if (errno == EINTR) continue;
 		if (n == 0) {
 			log_debug("remote",
@@ -109,7 +109,7 @@ static int
 remote_splice_in(struct ro_remote *remote)
 {
 	struct ro_local *local = remote->local;
-	if (remote->event->partial_bytes != sizeof(uint32_t)*2) {
+	if (remote->event->partial_bytes != sizeof(uint16_t)*2) {
 		/* No header yet */
 		ssize_t n = remote_prepare_receiving(remote, remote->event->partial_bytes);
 		if (n < 0) return -1;
@@ -118,9 +118,9 @@ remote_splice_in(struct ro_remote *remote)
 			return 0;
 		}
 		remote->event->partial_bytes += n;
-		if (remote->event->partial_bytes == sizeof(uint32_t)*2) {
-			remote->event->partial_header[0] = ntohl(remote->event->partial_header[0]);
-			remote->event->partial_header[1] = ntohl(remote->event->partial_header[1]);
+		if (remote->event->partial_bytes == sizeof(uint16_t)*2) {
+			remote->event->partial_header[0] = ntohs(remote->event->partial_header[0]);
+			remote->event->partial_header[1] = ntohs(remote->event->partial_header[1]);
 			if (remote->event->partial_header[0] != local->event->receive_serial + 1) {
 				/* Not the right remote, stop reading */
 				event_del(remote->event->read);
@@ -185,7 +185,7 @@ remote_splice_in(struct ro_remote *remote)
 		event_del(remote->event->read);
 		struct ro_remote *other;
 		TAILQ_FOREACH(other, &local->remotes, next)  {
-			if (other->event->partial_bytes == sizeof(uint32_t) * 2 &&
+			if (other->event->partial_bytes == sizeof(uint16_t) * 2 &&
 			    other->event->partial_header[0] == local->event->receive_serial + 1) {
 				event_add(other->event->read, NULL);
 				break;
@@ -218,7 +218,7 @@ remote_splice_out(struct ro_local *local)
 			}
 			if (local->event->current_send_remote->connected) break;
 		}
-		local->event->partial_bytes = sizeof(uint32_t)*2; /* We need to send the serial + the size */
+		local->event->partial_bytes = sizeof(uint16_t)*2; /* We need to send the serial + the size */
 		local->event->remaining_bytes = local->event->pipe.nr;
 		local->event->send_serial++;
 	}

@@ -85,7 +85,7 @@ proxy (resp. the relay) receives a new datagram from the client
 using this protocol over one of the connection opened (preferably with
 some kind of load balancing).
 
-The transmission protocol uses a fixed header of two unsigned 32-bit
+The transmission protocol uses a fixed header of two unsigned 16-bit
 value:
  - a serial number which is incremented for each datagram
  - the size of the datagram to be transmitted
