@@ -38,10 +38,10 @@ struct local_private {
 	struct event *read;
 	struct event *write;
 	struct {
-		struct event *read[2];  /* pipe for splicing from the local endpoint */
-		size_t nr;	        /* Number of bytes in read pipe */
-		struct event *write[2]; /* Pipe for splicing from the remote */
-		size_t nw;		/* Number of bytes in write pipe */
+		int read[2];  /* pipe for splicing from the local endpoint */
+		size_t nr;    /* Number of bytes in read pipe */
+		int write[2]; /* Pipe for splicing from the remote */
+		size_t nw;    /* Number of bytes in write pipe */
 	} pipe;
 
 	struct ro_remote *current_send_remote; /* We are currently sending to this remote */

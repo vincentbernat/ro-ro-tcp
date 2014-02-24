@@ -46,9 +46,7 @@ remote_prepare_sending(struct ro_remote *remote, size_t many, size_t partial)
 	 * want to transmit. */
 	uint32_t buf[2] = { htonl(remote->local->event->send_serial), htonl(many) };
 	ssize_t n;
-	int fd = event_get_fd(remote->event->write);
-	tcp_cork_set(fd, 1);
-	while ((n = write(fd,
+	while ((n = write(event_get_fd(remote->event->write),
 		    ((char *)buf) + (sizeof(uint32_t)*2 - partial), partial)) <= 0) {
 		if (errno == EINTR) continue;
 		if (n == 0) {
@@ -101,62 +99,6 @@ remote_prepare_receiving(struct ro_remote *remote, size_t partial)
 }
 
 /**
- * Splice data to remote end
- *
- * @return -1 on error, 0 if we cannot write anymore or 1 if we ran out of data
- */
-static int
-remote_splice_out(struct ro_remote *remote)
-{
-	struct ro_local *local = remote->local;
-	while (local->event->remaining_bytes > 0) {
-		ssize_t n = splice(event_get_fd(local->event->pipe.read[0]),
-		    NULL,
-		    event_get_fd(remote->event->write),
-		    NULL,
-		    local->event->remaining_bytes,
-		    SPLICE_F_MOVE|SPLICE_F_NONBLOCK);
-		if (n <= 0) {
-			if (errno == EINTR) continue;
-			if (n == 0) {
-				log_debug("remote",
-				    "while remote splice out, connection with [%s]:%s closed",
-				    remote->addr, remote->serv);
-				local_destroy(local);
-				return -1;
-			}
-			if (errno == EAGAIN || errno == EWOULDBLOCK) {
-				if (local->event->pipe.nr > 0) {
-					/* The pipe is not empty. Wait to write to remote */
-					event_add(remote->event->write, NULL);
-					event_del(local->event->pipe.read[0]);
-				} else {
-					/* The pipe is empty, just stop writing */
-					event_add(local->event->pipe.read[0], NULL);
-					event_del(remote->event->write);
-				}
-				return 0;
-			}
-			if (errno == ENOSYS || errno == EINVAL) {
-				log_warn("remote", "splice not supported, nothing will work");
-				local_destroy(local);
-				return -1;
-			}
-			log_warn("remote", "unexpected problem while splicing");
-			local_destroy(local);
-			return -1;
-		}
-		remote->stats.out += n;
-		local->event->remaining_bytes -= n;
-		local->event->pipe.nr -= n;
-		/* We can push more data to read pipe */
-		event_add(local->event->read, NULL);
-	}
-	tcp_cork_set(event_get_fd(remote->event->write), 0);
-	return 1;
-}
-
-/**
  * Splice data from remote end.
  *
  * We need to be sure that this is the right remote to read right now. If it is
@@ -196,7 +138,7 @@ remote_splice_in(struct ro_remote *remote)
 	while (max > 0) {
 		ssize_t n = splice(event_get_fd(remote->event->read),
 		    NULL,
-		    event_get_fd(local->event->pipe.write[1]),
+		    local->event->pipe.write[1],
 		    NULL,
 		    max,
 		    SPLICE_F_MOVE|SPLICE_F_NONBLOCK);
@@ -210,17 +152,7 @@ remote_splice_in(struct ro_remote *remote)
 				return -1;
 			}
 			if (errno == EAGAIN || errno == EWOULDBLOCK) {
-				if (local->event->pipe.nw > 0) {
-					/* We cannot know if the output is full,
-					 * but we know there is something here
-					 * and we will trigger an event when
-					 * more room become available. */
-					event_del(local->event->pipe.write[1]);
-					event_del(remote->event->read);
-				} else {
-					event_add(remote->event->read, NULL);
-					event_del(local->event->pipe.write[1]);
-				}
+				event_del(remote->event->read);
 				return 0;
 			}
 			if (errno == ENOSYS || errno == EINVAL) {
@@ -238,12 +170,11 @@ remote_splice_in(struct ro_remote *remote)
 		if ((local->event->pipe.nw += n) >= MAX_SPLICE_BYTES) {
 			/* Stop reading, the splice pipe is almost full */
 			event_del(remote->event->read);
-			event_add(local->event->pipe.write[0], NULL);
 			break;
 		}
 
 		/* We put data in the write pipe, let's read it */
-		event_add(local->event->pipe.write[0], NULL);
+		event_add(local->event->write, NULL);
 	}
 
 	if (remote->event->remaining_bytes == 0) {
@@ -265,111 +196,7 @@ remote_splice_in(struct ro_remote *remote)
 }
 
 static void
-local_splice_in(struct ro_local *local)
-{
-	while (1) {
-		ssize_t n = splice(event_get_fd(local->event->read), NULL,
-		    event_get_fd(local->event->pipe.read[1]), NULL,
-		    MAX_SPLICE_AT_ONCE,
-		    SPLICE_F_MOVE|SPLICE_F_NONBLOCK);
-		if (n <= 0) {
-			if (errno == EINTR) continue;
-			if (n == 0) {
-				log_debug("forward",
-				    "while local splice in, connection with [%s]:%s closed",
-				    local->addr, local->serv);
-				local_destroy(local);
-				return;
-			}
-			if (errno == EAGAIN || errno == EWOULDBLOCK) {
-				/* Either there is nothing to read or the pipe
-				 * is full. It's difficult to know. Let's assume
-				 * the pipe is full if we have data in it */
-				if (local->event->pipe.nr > 0) {
-					/* We know the pipe is not empty but we
-					 * don't know if it is full. Let's pause
-					 * and resume once we emptied a bit the
-					 * pipe */
-					event_del(local->event->read);
-					event_del(local->event->pipe.read[1]);
-				} else {
-					/* The pipe is empty, hence we don't
-					 * have data to feed it */
-					event_del(local->event->pipe.read[1]);
-					event_add(local->event->read, NULL);
-				}
-				return;
-			}
-			if (errno == ENOSYS || errno == EINVAL) {
-				log_warn("forward", "splice not supported, nothing will work");
-				local_destroy(local);
-				return;
-			}
-			log_warn("forward", "unknown problem while splicing");
-			local_destroy(local);
-			return;
-		}
-		local->stats.out += n;
-		if ((local->event->pipe.nr += n) >= MAX_SPLICE_BYTES) {
-			/* Stop feeding, the splice pipe is almost full */
-			event_del(local->event->read);
-			event_add(local->event->pipe.read[0], NULL);
-			break;
-		}
-		/* We have put data in the pipe, we can extract it. */
-		event_add(local->event->pipe.read[0], NULL);
-	}
-}
-
-static void
-local_splice_out(struct ro_local *local)
-{
-	while (local->event->pipe.nw > 0) {
-		ssize_t n = splice(event_get_fd(local->event->pipe.write[0]), NULL,
-		    event_get_fd(local->event->write), NULL,
-		    local->event->pipe.nw,
-		    SPLICE_F_MOVE|SPLICE_F_NONBLOCK);
-		if (n <= 0) {
-			if (errno == EINTR) continue;
-			if (n == 0) {
-				log_debug("forward",
-				    "while local splice out, connection with [%s]:%s closed",
-				    local->addr, local->serv);
-				local_destroy(local);
-				return;
-			}
-			if (errno == EAGAIN || errno == EWOULDBLOCK) {
-				if (local->event->pipe.nw > 0) {
-					/* We know we have data in pipe. So, we cannot write anymore. */
-					event_add(local->event->write, NULL);
-					event_del(local->event->pipe.write[0]);
-				} else {
-					event_add(local->event->pipe.write[0], NULL);
-					event_del(local->event->write);
-				}
-				return;
-			}
-			if (errno == ENOSYS || errno == EINVAL) {
-				log_warn("forward", "splice not supported, nothing will work");
-				local_destroy(local);
-				return;
-			}
-			log_warn("forward", "unknown problem while splicing");
-			local_destroy(local);
-			return;
-		}
-		local->stats.in += n;
-		local->event->pipe.nw -= n;
-		/* We can push more data to write pipe. */
-		if (local->event->current_receive_remote)
-			event_add(local->event->current_receive_remote->event->read, NULL);
-	}
-	if (local->event->pipe.nw == 0)
-		event_del(local->event->pipe.write[0]);
-}
-
-static void
-local_send_to_remote(struct ro_local *local)
+remote_splice_out(struct ro_local *local)
 {
 	/* We need to select a remote */
 	if (local->event->remaining_bytes == 0) {
@@ -398,13 +225,13 @@ local_send_to_remote(struct ro_local *local)
 
 	/* Write the header */
 	if (local->event->partial_bytes > 0) {
+		tcp_cork_set(event_get_fd(local->event->current_send_remote->event->write), 1);
 		ssize_t n = remote_prepare_sending(local->event->current_send_remote,
 		    local->event->remaining_bytes,
 		    local->event->partial_bytes);
 		if (n < 0) return;
 		if (n == 0) {
-			/* Cannot write to remote, stop reading from pipe */
-			event_del(local->event->pipe.read[0]);
+			/* Cannot write to remote */
 			event_add(local->event->current_send_remote->event->write, NULL);
 			return;
 		}
@@ -416,9 +243,130 @@ local_send_to_remote(struct ro_local *local)
 	}
 
 	/* Splice data */
-	size_t original = local->event->remaining_bytes;
-	if (remote_splice_out(local->event->current_send_remote) > 0)
-		local->event->pipe.nr -= (original - local->event->remaining_bytes);
+	struct ro_remote *remote = local->event->current_send_remote;
+	while (local->event->remaining_bytes > 0) {
+		ssize_t n = splice(local->event->pipe.read[0],
+		    NULL,
+		    event_get_fd(remote->event->write),
+		    NULL,
+		    local->event->remaining_bytes,
+		    SPLICE_F_MOVE|SPLICE_F_NONBLOCK);
+		if (n <= 0) {
+			if (errno == EINTR) continue;
+			if (n == 0) {
+				log_debug("remote",
+				    "while remote splice out, connection with [%s]:%s closed",
+				    remote->addr, remote->serv);
+				local_destroy(local);
+				return;
+			}
+			if (errno == EAGAIN || errno == EWOULDBLOCK) {
+				event_del(remote->event->write);
+				return;
+			}
+			if (errno == ENOSYS || errno == EINVAL) {
+				log_warn("remote", "splice not supported, nothing will work");
+				local_destroy(local);
+				return;
+			}
+			log_warn("remote", "unexpected problem while splicing");
+			local_destroy(local);
+			return;
+		}
+		remote->stats.out += n;
+		local->event->remaining_bytes -= n;
+		local->event->pipe.nr -= n;
+		/* We can push more data to read pipe */
+		event_add(local->event->read, NULL);
+	}
+	tcp_cork_set(event_get_fd(remote->event->write), 0);
+}
+
+
+static void
+local_splice_in(struct ro_local *local)
+{
+	while (1) {
+		ssize_t n = splice(event_get_fd(local->event->read), NULL,
+		    local->event->pipe.read[1], NULL,
+		    MAX_SPLICE_AT_ONCE,
+		    SPLICE_F_MOVE|SPLICE_F_NONBLOCK);
+		if (n <= 0) {
+			if (errno == EINTR) continue;
+			if (n == 0) {
+				log_debug("forward",
+				    "while local splice in, connection with [%s]:%s closed",
+				    local->addr, local->serv);
+				local_destroy(local);
+				return;
+			}
+			if (errno == EAGAIN || errno == EWOULDBLOCK) {
+				event_del(local->event->read);
+				break;
+			}
+			if (errno == ENOSYS || errno == EINVAL) {
+				log_warn("forward", "splice not supported, nothing will work");
+				local_destroy(local);
+				return;
+			}
+			log_warn("forward", "unknown problem while splicing");
+			local_destroy(local);
+			return;
+		}
+		local->stats.out += n;
+		if ((local->event->pipe.nr += n) >= MAX_SPLICE_BYTES) {
+			/* Stop feeding, the splice pipe is almost full */
+			event_del(local->event->read);
+			break;
+		}
+	}
+	/* We should enable remote, but maybe we don't have one yet. */
+	remote_splice_out(local);
+}
+
+static void
+local_splice_out(struct ro_local *local)
+{
+	while (local->event->pipe.nw > 0) {
+		ssize_t n = splice(local->event->pipe.write[0], NULL,
+		    event_get_fd(local->event->write), NULL,
+		    local->event->pipe.nw,
+		    SPLICE_F_MOVE|SPLICE_F_NONBLOCK);
+		if (n <= 0) {
+			if (errno == EINTR) continue;
+			if (n == 0) {
+				log_debug("forward",
+				    "while local splice out, connection with [%s]:%s closed",
+				    local->addr, local->serv);
+				local_destroy(local);
+				return;
+			}
+			if (errno == EAGAIN || errno == EWOULDBLOCK) {
+				event_del(local->event->write);
+				return;
+			}
+			if (errno == ENOSYS || errno == EINVAL) {
+				log_warn("forward", "splice not supported, nothing will work");
+				local_destroy(local);
+				return;
+			}
+			log_warn("forward", "unknown problem while splicing");
+			local_destroy(local);
+			return;
+		}
+		local->stats.in += n;
+		local->event->pipe.nw -= n;
+		/* We can push more data to write pipe. */
+		if (local->event->current_receive_remote)
+			/* Just wake up this remote */
+			event_add(local->event->current_receive_remote->event->read, NULL);
+		else {
+			/* Wake all remotes */
+			struct ro_remote *remote;
+			TAILQ_FOREACH(remote, &local->remotes, next)
+			    event_add(remote->event->read, NULL);
+		}
+	}
 }
 
 void
@@ -470,40 +418,6 @@ end:
 }
 
 void
-pipe_read_data_cb(evutil_socket_t fd, short what, void *arg)
-{
-	struct ro_local *local = arg;
-	switch (what) {
-	case EV_WRITE:
-		/* Pipe for incoming data is available */
-		local_splice_in(local);
-		return;
-	case EV_READ:
-		/* We can splice the data to a remote connection */
-		local_send_to_remote(local);
-		return;
-	}
-	log_warnx("forward", "unable to handle pipe read event %d on fd %d",
-	    what, fd);
-}
-
-void
-pipe_write_data_cb(evutil_socket_t fd, short what, void *arg)
-{
-	struct ro_local *local = arg;
-	switch (what) {
-	case EV_READ:
-		local_splice_out(local);
-		return;
-	case EV_WRITE:
-		remote_splice_out(local->event->current_send_remote);
-		return;
-	}
-	log_warnx("forward", "unable to handle pipe write event %d on fd %d",
-	    what, fd);
-}
-
-void
 remote_data_cb(evutil_socket_t fd, short what, void *arg)
 {
 	struct ro_remote *remote = arg;
@@ -523,8 +437,8 @@ remote_data_cb(evutil_socket_t fd, short what, void *arg)
 			}
 
 			event_del(remote->event->write);
-			event_add(local->event->read, NULL);
 			event_add(remote->event->read, NULL);
+			event_add(local->event->read, NULL);
 			remote->connected = true;
 			log_debug("remote", "connected to [%s]:%s (fd: %d)",
 			    remote->addr, remote->serv, fd);
@@ -538,7 +452,7 @@ remote_data_cb(evutil_socket_t fd, short what, void *arg)
 		remote_splice_in(remote);
 		return;
 	case EV_WRITE:
-		remote_splice_out(remote);
+		remote_splice_out(remote->local);
 		return;
 	}
 end:

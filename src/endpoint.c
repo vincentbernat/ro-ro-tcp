@@ -58,8 +58,8 @@ local_debug(struct ro_local *local)
 	    "  in:        %-10zu bytes   out: %-10zu bytes\n"
 	    "\n"
 	    "  socket:     read:  %-7s    write: %-7s\n"
-	    "  read pipe:  read:  %-7s    write: %-7s   bytes: %-10zu\n"
-	    "  write pipe: read:  %-7s    write: %-7s   bytes: %-10zu\n"
+	    "  read pipe:  bytes: %-10zu\n"
+	    "  write pipe: bytes: %-10zu\n"
 	    "\n"
 	    "  remote: sending to [%s]%s%s, receiving from [%s]%s%s\n"
 	    "  serial: sending %"PRIu32", receiving %"PRIu32"\n"
@@ -69,11 +69,7 @@ local_debug(struct ro_local *local)
 	    local->stats.in, local->stats.out,
 	    event_pending(local->event->read, EV_READ, NULL)?"wait":"no",
 	    event_pending(local->event->write, EV_WRITE, NULL)?"wait":"no",
-	    event_pending(local->event->pipe.read[0], EV_READ, NULL)?"wait":"no",
-	    event_pending(local->event->pipe.read[1], EV_WRITE, NULL)?"wait":"no",
 	    local->event->pipe.nr,
-	    event_pending(local->event->pipe.write[0], EV_READ, NULL)?"wait":"no",
-	    event_pending(local->event->pipe.write[1], EV_WRITE, NULL)?"wait":"no",
 	    local->event->pipe.nw,
 	    local->event->current_send_remote?local->event->current_send_remote->addr:"none",
 	    local->event->current_send_remote?":":"",
@@ -134,10 +130,10 @@ local_destroy(struct ro_local *local)
 	}
 
 	if (local->event) {
-		event_close_and_free(local->event->pipe.read[0]);
-		event_close_and_free(local->event->pipe.read[1]);
-		event_close_and_free(local->event->pipe.write[0]);
-		event_close_and_free(local->event->pipe.write[1]);
+		if (local->event->pipe.read[0] != -1) close(local->event->pipe.read[0]);
+		if (local->event->pipe.read[1] != -1) close(local->event->pipe.read[1]);
+		if (local->event->pipe.write[0] != -1) close(local->event->pipe.write[0]);
+		if (local->event->pipe.write[1] != -1) close(local->event->pipe.write[1]);
 		event_close_and_free(local->event->read);
 		event_close_and_free(local->event->write);
 		free(local->event);
@@ -267,6 +263,8 @@ local_init(struct ro_cfg *cfg, int fd,
 	    fd, fd2, pipe_read[0], pipe_read[1], pipe_write[0], pipe_write[1]);
 
 	if ((local->event = calloc(1, sizeof(struct local_private))) == NULL ||
+	    (local->event->pipe.read[0] = local->event->pipe.read[1] =
+		local->event->pipe.write[0] = local->event->pipe.write[1] = -1, 0) ||
 	    (local->event->read = event_new(cfg->event->base, fd,
 		EV_READ|EV_PERSIST,
 		local_data_cb,
@@ -275,27 +273,16 @@ local_init(struct ro_cfg *cfg, int fd,
 		    EV_WRITE|EV_PERSIST,
 		    local_data_cb,
 		    local))) == NULL ||
-	    ((fd2 = -1, local->event->pipe.read[0] = event_new(cfg->event->base, pipe_read[0],
-		    EV_READ|EV_PERSIST,
-		    pipe_read_data_cb,
-		    local))) == NULL ||
-	    ((pipe_read[0] = -1, local->event->pipe.read[1] = event_new(cfg->event->base, pipe_read[1],
-		    EV_WRITE|EV_PERSIST,
-		    pipe_read_data_cb,
-		    local))) == NULL ||
-	    ((pipe_read[1] = -1, local->event->pipe.write[0] = event_new(cfg->event->base, pipe_write[0],
-		    EV_READ|EV_PERSIST,
-		    pipe_write_data_cb,
-		    local))) == NULL ||
-	    ((pipe_write[0] = -1, local->event->pipe.write[1] = event_new(cfg->event->base, pipe_write[1],
-		    EV_WRITE|EV_PERSIST,
-		    pipe_write_data_cb,
-		    local))) == NULL ||
-	    ((pipe_write[1] = -1, 0))) {
+	    ((fd2 = -1, 0))) {
 		log_warnx("local", "unable to allocate events for new local endpoint [%s]:%s",
 		    addr, serv);
 		goto error;
 	}
+
+	local->event->pipe.read[0] = pipe_read[0];
+	local->event->pipe.read[1] = pipe_read[1];
+	local->event->pipe.write[0] = pipe_write[0];
+	local->event->pipe.write[1] = pipe_write[1];
 
 	return local;
 

@@ -80,8 +80,6 @@ void connection_established(struct ro_local *, struct ro_remote *);
 
 /* forward.c */
 void remote_data_cb(evutil_socket_t, short, void *);
-void pipe_write_data_cb(evutil_socket_t, short, void *);
-void pipe_read_data_cb(evutil_socket_t, short, void *);
 void local_data_cb(evutil_socket_t, short, void *);
 
 /* General */
