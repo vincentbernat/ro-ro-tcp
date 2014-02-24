@@ -20,6 +20,9 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 
 static void
 tcp_cork_set(int fd, bool enable)
