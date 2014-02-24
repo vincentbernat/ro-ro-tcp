@@ -7,9 +7,12 @@ bandwidth over links with high latency and moderate error rates.
 
 The name comes from [Ro-Ro][] which stands for *Roll-On, Roll-Off*
 which is a kind of railway station where trains are balanced accross
-several tracks before entering the station to ensure a high bandwidth.
+several tracks before entering the station to ensure a high
+bandwidth. A [small video][] made with OpenTTD shows how this works
+(except there is no packet reordering).
 
 [Ro-Ro]: http://wiki.openttd.org/Railway_station#Ro-Ro
+[small video]: http://www.dailymotion.com/video/x1dbe95_illustration-of-how-ro-ro-tcp-works_tech
 
 A kernel 2.6.27.13 or later is required: `ro-ro-tcp` makes use of data
 splicing and doesn't work around bugs in earlier kernel versions.
