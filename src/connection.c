@@ -102,10 +102,12 @@ incoming_write(struct bufferevent *bev, void *arg)
 	TAILQ_FOREACH(local, &cfg->locals, next)
 	    if (local->group_id == incoming->id) break;
 	if (local == NULL) {
-		char addr[INET6_ADDRSTRLEN] = {};
-		char serv[SERVSTRLEN] = {};
-		if ((sfd = endpoint_connect(cfg->local, addr, serv)) == -1 ||
-		    (local = local_init(cfg, sfd, addr, serv)) == NULL) {
+		char laddr[INET6_ADDRSTRLEN] = {};
+		char lserv[SERVSTRLEN] = {};
+		char raddr[INET6_ADDRSTRLEN] = {};
+		char rserv[SERVSTRLEN] = {};
+		if ((sfd = endpoint_connect(cfg->local, laddr, lserv, raddr, rserv)) == -1 ||
+		    (local = local_init(cfg, sfd, raddr, rserv)) == NULL) {
 			incoming_destroy(incoming, true);
 			return;
 		}
@@ -117,6 +119,7 @@ incoming_write(struct bufferevent *bev, void *arg)
 	/* And attach a new remote on it. */
 	struct ro_remote *remote = NULL;
 	if ((remote = remote_init(cfg, local, incoming->fd,
+		    local->addr, local->serv,
 		    incoming->addr, incoming->serv)) == NULL) {
 		incoming_destroy(incoming, false);
 		local_destroy(local);
@@ -151,11 +154,13 @@ int
 connection_open(struct ro_cfg *cfg, struct ro_local *local)
 {
 	struct ro_remote *remote = NULL;
+	char laddr[INET6_ADDRSTRLEN] = {};
+	char lserv[SERVSTRLEN] = {};
 	char raddr[INET6_ADDRSTRLEN] = {};
 	char rserv[SERVSTRLEN] = {};
 	int sfd;
-	if ((sfd = endpoint_connect(cfg->remote, raddr, rserv)) == -1 ||
-	    (remote = remote_init(cfg, local, sfd, raddr, rserv)) == NULL)
+	if ((sfd = endpoint_connect(cfg->remote, laddr, lserv, raddr, rserv)) == -1 ||
+	    (remote = remote_init(cfg, local, sfd, laddr, lserv, raddr, rserv)) == NULL)
 		return -1;
 	event_add(remote->event->write, NULL); /* Check if we are connected */
 	TAILQ_INSERT_TAIL(&local->remotes, remote, next);

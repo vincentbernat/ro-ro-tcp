@@ -29,14 +29,15 @@ void
 remote_debug(struct ro_remote *remote)
 {
 	log_info("endpoint",
-	    "remote [%s]:%s:\n"
+	    "remote [%s]:%s <-> [%s]:%s:\n"
 	    "  connected: %s\n"
 	    "  in:        %-10zu bytes   out: %-10zu bytes\n"
 	    "  read:      %-10s       write: %-10s\n"
 	    "  header: %zu (out of %zu)\n"
 	    "  serial: %"PRIu32"\n"
 	    "  to receive: %"PRIu32" bytes\n",
-	    remote->addr, remote->serv,
+	    remote->laddr, remote->lserv,
+	    remote->raddr, remote->rserv,
 	    remote->connected?"yes":"no",
 	    remote->stats.in, remote->stats.out,
 	    event_pending(remote->event->read, EV_READ, NULL)?"wait":"no",
@@ -61,7 +62,7 @@ local_debug(struct ro_local *local)
 	    "  read pipe:  bytes: %-10zu\n"
 	    "  write pipe: bytes: %-10zu\n"
 	    "\n"
-	    "  remote: sending to [%s]%s%s, receiving from [%s]%s%s\n"
+	    "  remote: sending [%s]%s%s <-> [%s]%s%s, receiving [%s]%s%s <-> [%s]%s%s\n"
 	    "  serial: sending %"PRIu32", receiving %"PRIu32"\n"
 	    "  to receive: %"PRIu32" bytes (+ %zu bytes of header)\n",
 	    local->addr, local->serv,
@@ -71,12 +72,18 @@ local_debug(struct ro_local *local)
 	    event_pending(local->event->write, EV_WRITE, NULL)?"wait":"no",
 	    local->event->pipe.nr,
 	    local->event->pipe.nw,
-	    local->event->current_send_remote?local->event->current_send_remote->addr:"none",
+	    local->event->current_send_remote?local->event->current_send_remote->laddr:"none",
 	    local->event->current_send_remote?":":"",
-	    local->event->current_send_remote?local->event->current_send_remote->serv:"",
-	    local->event->current_receive_remote?local->event->current_receive_remote->addr:"none",
+	    local->event->current_send_remote?local->event->current_send_remote->lserv:"",
+	    local->event->current_send_remote?local->event->current_send_remote->raddr:"none",
+	    local->event->current_send_remote?":":"",
+	    local->event->current_send_remote?local->event->current_send_remote->rserv:"",
+	    local->event->current_receive_remote?local->event->current_receive_remote->laddr:"none",
 	    local->event->current_receive_remote?":":"",
-	    local->event->current_receive_remote?local->event->current_receive_remote->serv:"",
+	    local->event->current_receive_remote?local->event->current_receive_remote->lserv:"",
+	    local->event->current_receive_remote?local->event->current_receive_remote->raddr:"none",
+	    local->event->current_receive_remote?":":"",
+	    local->event->current_receive_remote?local->event->current_receive_remote->rserv:"",
 	    local->event->send_serial, local->event->receive_serial,
 	    local->event->remaining_bytes,
 	    2*sizeof(uint16_t) - local->event->partial_bytes);
@@ -94,8 +101,9 @@ remote_destroy(struct ro_remote *remote)
 {
 	if (!remote) return;
 	struct ro_local *local = remote->local;
-	log_debug("endpoint", "destroy remote [%s]:%s",
-	    remote->addr, remote->serv);
+	log_debug("endpoint", "destroy remote [%s]:%s <-> [%s]:%s",
+	    remote->laddr, remote->lserv,
+	    remote->raddr, remote->rserv);
 
 	if (remote->event) {
 		event_close_and_free(remote->event->read);
@@ -147,17 +155,18 @@ local_destroy(struct ro_local *local)
 
 int
 endpoint_connect(struct addrinfo *rem,
-    char addr[static INET6_ADDRSTRLEN], char serv[static SERVSTRLEN])
+    char laddr[static INET6_ADDRSTRLEN], char lserv[static SERVSTRLEN],
+    char raddr[static INET6_ADDRSTRLEN], char rserv[static SERVSTRLEN])
 {
 	int sfd = -1;
 	int err;
 	struct addrinfo *re;
 	for (re = rem; re != NULL; re = re->ai_next) {
 		getnameinfo(re->ai_addr, re->ai_addrlen,
-		    addr, INET6_ADDRSTRLEN,
-		    serv, SERVSTRLEN,
+		    raddr, INET6_ADDRSTRLEN,
+		    rserv, SERVSTRLEN,
 		    NI_NUMERICHOST | NI_NUMERICSERV); /* cannot fail */
-		log_debug("endpoint", "try to connect to [%s]:%s", addr, serv);
+		log_debug("endpoint", "try to connect to [%s]:%s", raddr, rserv);
 		if ((sfd = socket(re->ai_family, re->ai_socktype, re->ai_protocol)) == -1)
 			continue;
 		evutil_make_socket_nonblocking(sfd);
@@ -172,16 +181,30 @@ endpoint_connect(struct addrinfo *rem,
 		errno = err;
 	}
 	if (re == NULL) {
-		log_warn("endpoint", "unable to connect to [%s]:%s", addr, serv);
+		log_warn("endpoint", "unable to connect to [%s]:%s", raddr, rserv);
 		if (sfd != -1) close(sfd);
 		return -1;
 	}
+
+	/* Get local endpoint name */
+	struct sockaddr_storage local;
+	socklen_t len = sizeof(struct sockaddr_storage);
+	if (getsockname(sfd, (struct sockaddr*)&local, &len) == -1) {
+		log_warnx("endpoint", "unable to get local endpoint");
+		close(sfd);
+	}
+	getnameinfo((struct sockaddr*)&local, len,
+	    laddr, INET6_ADDRSTRLEN,
+	    lserv, SERVSTRLEN,
+	    NI_NUMERICHOST | NI_NUMERICSERV);
+
 	return sfd;
 }
 
 struct ro_remote *
 remote_init(struct ro_cfg *cfg, struct ro_local *local, int sfd,
-    char addr[static INET6_ADDRSTRLEN], char serv[static SERVSTRLEN])
+    char laddr[static INET6_ADDRSTRLEN], char lserv[static SERVSTRLEN],
+    char raddr[static INET6_ADDRSTRLEN], char rserv[static SERVSTRLEN])
 {
 	struct ro_remote *remote = calloc(1, sizeof(struct ro_remote));
 	if (remote == NULL) {
@@ -193,8 +216,10 @@ remote_init(struct ro_cfg *cfg, struct ro_local *local, int sfd,
 
 	remote->cfg = cfg;
 	remote->local = local;
-	memcpy(remote->addr, addr, sizeof(remote->addr));
-	memcpy(remote->serv, serv, sizeof(remote->serv));
+	memcpy(remote->laddr, laddr, sizeof(remote->laddr));
+	memcpy(remote->lserv, lserv, sizeof(remote->lserv));
+	memcpy(remote->raddr, raddr, sizeof(remote->raddr));
+	memcpy(remote->rserv, rserv, sizeof(remote->rserv));
 
 	sfd2 = dup(sfd);
 	log_debug("remote", "new remote setup (socket=%d/%d)",

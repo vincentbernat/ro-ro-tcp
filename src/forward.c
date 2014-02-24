@@ -53,8 +53,9 @@ remote_prepare_sending(struct ro_remote *remote, size_t many, size_t partial)
 		    ((char *)buf) + (sizeof(uint16_t)*2 - partial), partial)) <= 0) {
 		if (errno == EINTR) continue;
 		if (n == 0) {
-			log_debug("remote", "connection to [%s]:%s was closed",
-			    remote->addr, remote->serv);
+			log_debug("remote", "connection [%s]:%s <-> [%s]:%s was closed",
+			    remote->laddr, remote->lserv,
+			    remote->raddr, remote->rserv);
 			local_destroy(remote->local);
 			return -1;
 		}
@@ -62,7 +63,7 @@ remote_prepare_sending(struct ro_remote *remote, size_t many, size_t partial)
 			return 0;
 		}
 		log_warn("remote", "unable to send header to [%s]:%s",
-		    remote->addr, remote->serv);
+		    remote->raddr, remote->rserv);
 		local_destroy(remote->local);
 		return -1;
 	}
@@ -85,8 +86,9 @@ remote_prepare_receiving(struct ro_remote *remote, size_t partial)
 		if (errno == EINTR) continue;
 		if (n == 0) {
 			log_debug("remote",
-			    "connection to [%s]:%s was closed",
-			    remote->addr, remote->serv);
+			    "connection [%s]:%s <-> [%s]:%s was closed",
+			    remote->laddr, remote->lserv,
+			    remote->raddr, remote->rserv);
 			local_destroy(remote->local);
 			return -1;
 		}
@@ -94,7 +96,7 @@ remote_prepare_receiving(struct ro_remote *remote, size_t partial)
 			return 0;
 		}
 		log_warn("remote", "unable to read header from [%s]:%s",
-		    remote->addr, remote->serv);
+		    remote->raddr, remote->rserv);
 		local_destroy(remote->local);
 		return -1;
 	}
@@ -149,8 +151,9 @@ remote_splice_in(struct ro_remote *remote)
 			if (errno == EINTR) continue;
 			if (n == 0) {
 				log_debug("remote",
-				    "while remote splice in, connection with [%s]:%s closed",
-				    remote->addr, remote->serv);
+				    "while remote splice in, connection [%s]:%s <-> [%s]:%s closed",
+				    remote->laddr, remote->lserv,
+				    remote->raddr, remote->rserv);
 				local_destroy(local);
 				return -1;
 			}
@@ -258,8 +261,9 @@ remote_splice_out(struct ro_local *local)
 			if (errno == EINTR) continue;
 			if (n == 0) {
 				log_debug("remote",
-				    "while remote splice out, connection with [%s]:%s closed",
-				    remote->addr, remote->serv);
+				    "while remote splice out, connection [%s]:%s <-> [%s]:%s closed",
+				    remote->laddr, remote->lserv,
+				    remote->raddr, remote->rserv);
 				local_destroy(local);
 				return;
 			}
@@ -434,7 +438,7 @@ remote_data_cb(evutil_socket_t fd, short what, void *arg)
 			if (errno == EINPROGRESS) return; /* ??? */
 			if (errno != 0) {
 				log_warn("remote", "unable to connect to [%s]:%s",
-				    remote->addr, remote->serv);
+				    remote->raddr, remote->rserv);
 				local_destroy(local);
 				return;
 			}
@@ -443,8 +447,10 @@ remote_data_cb(evutil_socket_t fd, short what, void *arg)
 			event_add(remote->event->read, NULL);
 			event_add(local->event->read, NULL);
 			remote->connected = true;
-			log_debug("remote", "connected to [%s]:%s (fd: %d)",
-			    remote->addr, remote->serv, fd);
+			log_debug("remote", "connected [%s]:%s <-> [%s]:%s (fd: %d)",
+			    remote->laddr, remote->lserv,
+			    remote->raddr, remote->rserv,
+			    fd);
 			connection_established(local, remote);
 			return;
 		}

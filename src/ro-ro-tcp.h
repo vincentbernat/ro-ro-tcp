@@ -64,10 +64,12 @@ void event_shutdown(struct ro_cfg *);
 struct ro_local *local_init(struct ro_cfg *, int,
     char[static INET6_ADDRSTRLEN], char[static SERVSTRLEN]);
 struct ro_remote *remote_init(struct ro_cfg *, struct ro_local *, int,
+    char[static INET6_ADDRSTRLEN], char[static SERVSTRLEN],
     char[static INET6_ADDRSTRLEN], char[static SERVSTRLEN]);
 void remote_destroy(struct ro_remote *);
 void local_destroy(struct ro_local *);
 int  endpoint_connect(struct addrinfo *,
+    char[static INET6_ADDRSTRLEN], char[static SERVSTRLEN],
     char[static INET6_ADDRSTRLEN], char[static SERVSTRLEN]);
 void remote_debug(struct ro_remote *);
 void local_debug(struct ro_local *);
@@ -99,8 +101,10 @@ struct ro_remote {
 	bool connected;
 
 	/* To display messages about this remote */
-	char addr[INET6_ADDRSTRLEN];
-	char serv[SERVSTRLEN];
+	char laddr[INET6_ADDRSTRLEN];
+	char lserv[SERVSTRLEN];
+	char raddr[INET6_ADDRSTRLEN];
+	char rserv[SERVSTRLEN];
 
 	struct {
 		size_t in;	/* input bytes */
