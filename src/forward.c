@@ -342,8 +342,7 @@ local_splice_out(struct ro_local *local)
 				return;
 			}
 			if (errno == EAGAIN || errno == EWOULDBLOCK) {
-				event_del(local->event->write);
-				return;
+				break;
 			}
 			if (errno == ENOSYS || errno == EINVAL) {
 				log_warn("forward", "splice not supported, nothing will work");
@@ -367,6 +366,7 @@ local_splice_out(struct ro_local *local)
 			    event_add(remote->event->read, NULL);
 		}
 	}
+	event_del(local->event->write);
 }
 
 void
