@@ -222,7 +222,7 @@ remote_init(struct ro_cfg *cfg, struct ro_local *local, int sfd,
 	memcpy(remote->rserv, rserv, sizeof(remote->rserv));
 
 	sfd2 = dup(sfd);
-	log_debug("remote", "new remote setup (socket=%d/%d)",
+	log_debug("endpoint", "new remote setup (socket=%d/%d)",
 	    sfd, sfd2);
 
 	if (sfd2 == -1 ||
@@ -284,7 +284,7 @@ local_init(struct ro_cfg *cfg, int fd,
 	evutil_make_socket_nonblocking(pipe_write[0]);
 	evutil_make_socket_nonblocking(pipe_write[1]);
 
-	log_debug("local", "new local endpoint setup (socket=%d/%d, pipe_read=(%d,%d), pipe_write=(%d, %d))",
+	log_debug("endpoint", "new local endpoint setup (socket=%d/%d, pipe_read=(%d,%d), pipe_write=(%d, %d))",
 	    fd, fd2, pipe_read[0], pipe_read[1], pipe_write[0], pipe_write[1]);
 
 	if ((local->event = calloc(1, sizeof(struct local_private))) == NULL ||

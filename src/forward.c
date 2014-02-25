@@ -20,6 +20,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -119,6 +120,10 @@ remote_splice_in(struct ro_remote *remote)
 		ssize_t n = remote_prepare_receiving(remote, remote->event->partial_bytes);
 		if (n < 0) return -1;
 		if (n == 0) {
+			log_debug("forward",
+			    "[%s]:%s <-> [%s]:%s: no incoming data available, start reading",
+			    remote->laddr, remote->lserv,
+			    remote->raddr, remote->rserv);
 			event_add(remote->event->read, NULL);
 			return 0;
 		}
@@ -128,6 +133,13 @@ remote_splice_in(struct ro_remote *remote)
 			remote->event->partial_header[1] = ntohs(remote->event->partial_header[1]);
 			if (remote->event->partial_header[0] != local->event->receive_serial + 1) {
 				/* Not the right remote, stop reading */
+				log_debug("forward",
+				    "[%s]:%s <-> [%s]:%s: "
+				    "serial is %" PRIu16 " while expecting %" PRIu16"; stop reading",
+				    remote->laddr, remote->lserv,
+				    remote->raddr, remote->rserv,
+				    remote->event->partial_header[0],
+				    local->event->receive_serial + 1);
 				event_del(remote->event->read);
 				return 0;
 			}
@@ -158,6 +170,10 @@ remote_splice_in(struct ro_remote *remote)
 				return -1;
 			}
 			if (errno == EAGAIN || errno == EWOULDBLOCK) {
+				log_debug("forward",
+				    "[%s]:%s <-> [%s]:%s: splice in would block, stop reading",
+				    remote->laddr, remote->lserv,
+				    remote->raddr, remote->rserv);
 				event_del(remote->event->read);
 				return 0;
 			}
@@ -175,11 +191,20 @@ remote_splice_in(struct ro_remote *remote)
 		max -= n;
 		if ((local->event->pipe.nw += n) >= MAX_SPLICE_BYTES) {
 			/* Stop reading, the splice pipe is almost full */
+			log_debug("forward",
+			    "[%s]:%s <-> [%s]:%s: spliced more than %d bytes, stop reading",
+			    remote->laddr, remote->lserv,
+			    remote->raddr, remote->rserv,
+			    MAX_SPLICE_BYTES);
 			event_del(remote->event->read);
 			break;
 		}
 
 		/* We put data in the write pipe, let's read it */
+		log_debug("forward",
+		    "[%s]:%s <-> [%s]:%s: put data in the write pipe, start writing on local",
+		    remote->laddr, remote->lserv,
+		    remote->raddr, remote->rserv);
 		event_add(local->event->write, NULL);
 	}
 
@@ -188,11 +213,19 @@ remote_splice_in(struct ro_remote *remote)
 		remote->event->partial_bytes = 0;
 
 		/* Let's enable another remote if possible */
+		log_debug("forward",
+		    "[%s]:%s <-> [%s]:%s: read all data from remote, stop reading",
+		    remote->laddr, remote->lserv,
+		    remote->raddr, remote->rserv);
 		event_del(remote->event->read);
 		struct ro_remote *other;
 		TAILQ_FOREACH(other, &local->remotes, next)  {
 			if (other->event->partial_bytes == sizeof(uint16_t) * 2 &&
 			    other->event->partial_header[0] == local->event->receive_serial + 1) {
+				log_debug("forward",
+				    "[%s]:%s <-> [%s]:%s: next remote, start reading",
+				    other->laddr, other->lserv,
+				    other->raddr, other->laddr);
 				event_add(other->event->read, NULL);
 				break;
 			}
@@ -205,51 +238,65 @@ static void
 remote_splice_out(struct ro_local *local)
 {
 	/* We need to select a remote */
+	struct ro_remote *remote = local->event->current_send_remote;
 	if (local->event->remaining_bytes == 0) {
 		/* Select next available remote. */
 		int loop = 0;
 		while (1) {
-			if (local->event->current_send_remote == NULL)
-				local->event->current_send_remote = TAILQ_FIRST(&local->remotes);
-			else if ((local->event->current_send_remote =
-				TAILQ_NEXT(local->event->current_send_remote, next)) == NULL) {
-				local->event->current_send_remote = TAILQ_FIRST(&local->remotes);
+			if (remote == NULL)
+				remote = TAILQ_FIRST(&local->remotes);
+			else if ((remote =
+				TAILQ_NEXT(remote, next)) == NULL) {
+				remote = TAILQ_FIRST(&local->remotes);
 				loop++;
 			}
-			if (local->event->current_send_remote == NULL || loop >= 2) {
+			if (remote == NULL || loop >= 2) {
 				/* Should not happen */
 				log_warnx("forward", "no remote available?");
 				local_destroy(local);
 				return;
 			}
-			if (local->event->current_send_remote->connected) break;
+			if (remote->connected) break;
 		}
+		log_debug("forward",
+		    "[%s]:%s <-> [%s]:%s: selected as next remote for %zu bytes",
+		    remote->laddr, remote->lserv,
+		    remote->raddr, remote->rserv,
+		    local->event->pipe.nr);
 		local->event->partial_bytes = sizeof(uint16_t)*2; /* We need to send the serial + the size */
 		local->event->remaining_bytes = local->event->pipe.nr;
 		local->event->send_serial++;
+		local->event->current_send_remote = remote;
 	}
 
 	/* Write the header */
 	if (local->event->partial_bytes > 0) {
-		tcp_cork_set(event_get_fd(local->event->current_send_remote->event->write), 1);
-		ssize_t n = remote_prepare_sending(local->event->current_send_remote,
+		tcp_cork_set(event_get_fd(remote->event->write), 1);
+		ssize_t n = remote_prepare_sending(remote,
 		    local->event->remaining_bytes,
 		    local->event->partial_bytes);
 		if (n < 0) return;
 		if (n == 0) {
 			/* Cannot write to remote */
-			event_add(local->event->current_send_remote->event->write, NULL);
+			log_debug("forward",
+			    "[%s]:%s <-> [%s]:%s: currently cannot send header to remote, start writing",
+			    remote->laddr, remote->lserv,
+			    remote->raddr, remote->rserv);
+			event_add(remote->event->write, NULL);
 			return;
 		}
 		if ((local->event->partial_bytes -= n) > 0) {
 			/* Partial write? */
-			event_add(local->event->current_send_remote->event->write, NULL);
+			log_debug("forward",
+			    "[%s]:%s <-> [%s]:%s: partial header sent, start writing",
+			    remote->laddr, remote->lserv,
+			    remote->raddr, remote->rserv);
+			event_add(remote->event->write, NULL);
 			return;
 		}
 	}
 
 	/* Splice data */
-	struct ro_remote *remote = local->event->current_send_remote;
 	while (local->event->remaining_bytes > 0) {
 		ssize_t n = splice(local->event->pipe.read[0],
 		    NULL,
@@ -268,6 +315,10 @@ remote_splice_out(struct ro_local *local)
 				return;
 			}
 			if (errno == EAGAIN || errno == EWOULDBLOCK) {
+				log_debug("forward",
+				    "[%s]:%s <-> [%s]:%s: currently cannot splice data to remote, start writing",
+				    remote->laddr, remote->lserv,
+				    remote->raddr, remote->rserv);
 				event_del(remote->event->write);
 				return;
 			}
@@ -284,6 +335,10 @@ remote_splice_out(struct ro_local *local)
 		local->event->remaining_bytes -= n;
 		local->event->pipe.nr -= n;
 		/* We can push more data to read pipe */
+		log_debug("forward",
+		    "[%s]:%s <-> [%s]:%s: data has been sent to remote, start reading on local",
+		    remote->laddr, remote->lserv,
+		    remote->raddr, remote->rserv);
 		event_add(local->event->read, NULL);
 	}
 	tcp_cork_set(event_get_fd(remote->event->write), 0);
@@ -301,14 +356,24 @@ local_splice_in(struct ro_local *local)
 		if (n <= 0) {
 			if (errno == EINTR) continue;
 			if (n == 0) {
-				log_debug("forward",
+				log_debug("local",
 				    "while local splice in, connection with [%s]:%s closed",
 				    local->addr, local->serv);
 				local_destroy(local);
 				return;
 			}
 			if (errno == EAGAIN || errno == EWOULDBLOCK) {
-				event_del(local->event->read);
+				if (local->event->pipe.nr > 0) {
+					log_debug("forward",
+					    "[%s]:%s: cannot splice more data from local, stop reading",
+					    local->addr, local->serv);
+					event_del(local->event->read);
+				} else {
+					log_debug("forward",
+					    "[%s]:%s: cannot splice more data from local, wait for read read",
+					    local->addr, local->serv);
+					event_add(local->event->read, NULL); /* useless, but for consistency */
+				}
 				break;
 			}
 			if (errno == ENOSYS || errno == EINVAL) {
@@ -323,6 +388,10 @@ local_splice_in(struct ro_local *local)
 		local->stats.out += n;
 		if ((local->event->pipe.nr += n) >= MAX_SPLICE_BYTES) {
 			/* Stop feeding, the splice pipe is almost full */
+			log_debug("forward",
+			    "[%s]:%s: already spliced more than %d bytes, stop reading",
+			    local->addr, local->serv,
+			    MAX_SPLICE_BYTES);
 			event_del(local->event->read);
 			break;
 		}
@@ -342,7 +411,7 @@ local_splice_out(struct ro_local *local)
 		if (n <= 0) {
 			if (errno == EINTR) continue;
 			if (n == 0) {
-				log_debug("forward",
+				log_debug("local",
 				    "while local splice out, connection with [%s]:%s closed",
 				    local->addr, local->serv);
 				local_destroy(local);
@@ -360,19 +429,39 @@ local_splice_out(struct ro_local *local)
 			local_destroy(local);
 			return;
 		}
+
 		local->stats.in += n;
 		local->event->pipe.nw -= n;
 		/* We can push more data to write pipe. */
-		if (local->event->current_receive_remote)
+		struct ro_remote *remote = local->event->current_receive_remote;
+		if (remote) {
 			/* Just wake up this remote */
-			event_add(local->event->current_receive_remote->event->read, NULL);
-		else {
+			log_debug("forward",
+			    "[%s]:%s: can receive more data, waking up [%s]:%s <-> [%s]:%s for read",
+			    local->addr, local->serv,
+			    remote->laddr, remote->lserv,
+			    remote->raddr, remote->rserv);
+			event_add(remote->event->read, NULL);
+		} else {
 			/* Wake all remotes */
-			struct ro_remote *remote;
-			TAILQ_FOREACH(remote, &local->remotes, next)
-			    event_add(remote->event->read, NULL);
+			log_debug("forward",
+			    "[%s]:%s: can receive more data, waking up all remotes for read",
+			    local->addr, local->serv);
+			TAILQ_FOREACH(remote, &local->remotes, next) {
+				if (remote->connected) {
+					event_add(remote->event->read, NULL);
+				} else {
+					log_debug("forward",
+					    "[%s]:%s <-> [%s]:%s: not waking up, not connected yet",
+					    remote->laddr, remote->lserv,
+					    remote->raddr, remote->rserv);
+				}
+			}
 		}
 	}
+	log_debug("forward",
+	    "[%s]:%s: emptied the write pipe, stop writing",
+	    local->addr, local->serv);
 	event_del(local->event->write);
 }
 
@@ -397,15 +486,20 @@ local_data_cb(evutil_socket_t fd, short what, void *arg)
 			event_del(local->event->write);
 			event_add(local->event->read, NULL);
 			local->connected = true;
+			log_debug("local", "connected to [%s]:%s (fd: %d)",
+			    local->addr, local->serv, fd);
 
 			/* See `incoming_write()` in `connection.c` */
 			struct ro_remote *remote;
 			TAILQ_FOREACH(remote, &local->remotes, next) {
-				if (remote->connected)
+				if (remote->connected) {
+					log_debug("forward",
+					    "[%s]:%s <-> [%s]:%s: enabling read",
+					    remote->laddr, remote->lserv,
+					    remote->raddr, remote->rserv);
 					event_add(remote->event->read, NULL);
+				}
 			}
-			log_debug("local", "connected to [%s]:%s (fd: %d)",
-			    local->addr, local->serv, fd);
 			return;
 		}
 		goto end;
