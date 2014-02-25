@@ -120,6 +120,8 @@ static void
 remote_splice_in(struct ro_remote *remote)
 {
 	struct ro_local *local = remote->local;
+
+	/* Read the remaining of the header if needed */
 	if (remote->event->partial_bytes != RO_HEADER_SIZE) {
 		/* No header yet */
 		ssize_t n = remote_prepare_receiving(remote, remote->event->partial_bytes);
@@ -142,21 +144,34 @@ remote_splice_in(struct ro_remote *remote)
 			    remote->event->partial_header + sizeof(remote->event->receive_serial),
 			    sizeof(remote->event->remaining_bytes));
 			remote->event->remaining_bytes = ntohl(remote->event->remaining_bytes);
-			if (remote->event->receive_serial != local->event->receive_serial + 1) {
-				/* Not the right remote, stop reading */
-				log_debug("forward",
-				    "[%s]:%s <-> [%s]:%s: "
-				    "serial is %" PRIu16 " while expecting %" PRIu16"; stop reading",
-				    remote->laddr, remote->lserv,
-				    remote->raddr, remote->rserv,
-				    remote->event->receive_serial,
-				    local->event->receive_serial + 1);
-				event_del(remote->event->read);
-				return;
-			}
-			local->event->receive_serial++;
-			local->event->current_send_remote = remote;
+		} else return;	/* Header still incomplete */
+	}
+
+	/* If header is here, check if we need to select a new remote */
+	if (local->event->current_receive_remote == NULL ||
+	    local->event->current_receive_remote->event->receive_serial != local->event->receive_serial ||
+	    local->event->current_receive_remote->event->remaining_bytes == 0) {
+		if (remote->event->receive_serial != local->event->receive_serial + 1) {
+			/* Not the right remote, stop reading */
+			log_debug("forward",
+			    "[%s]:%s <-> [%s]:%s: "
+			    "serial is %" PRIu16 " while expecting %" PRIu16"; stop reading",
+			    remote->laddr, remote->lserv,
+			    remote->raddr, remote->rserv,
+			    remote->event->receive_serial,
+			    local->event->receive_serial + 1);
+			event_del(remote->event->read);
+			return;
 		}
+		local->event->receive_serial++;
+		local->event->current_receive_remote = remote;
+		log_debug("forward",
+		    "[%s]:%s <-> [%s]:%s: "
+		    "receiving %"PRIu32" bytes (serial is %"PRIu16")",
+		    remote->laddr, remote->lserv,
+		    remote->raddr, remote->rserv,
+		    remote->event->remaining_bytes,
+		    remote->event->receive_serial);
 	}
 
 	/* Splice data */
