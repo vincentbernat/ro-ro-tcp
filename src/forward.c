@@ -21,6 +21,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <string.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -48,10 +49,14 @@ remote_prepare_sending(struct ro_remote *remote, size_t many, size_t partial)
 {
 	/* Our header is quite simple: the serial, the size of the buffer we
 	 * want to transmit. */
-	uint16_t buf[2] = { htons(remote->local->event->send_serial), htons(many) };
+	char buf[RO_HEADER_SIZE] = {};
+	uint16_t serial = htons(remote->local->event->send_serial);
+	uint32_t bytes = htonl(many);
+	memcpy(buf, &serial, sizeof(serial));
+	memcpy(buf + sizeof(serial), &bytes, sizeof(bytes));
 	ssize_t n;
 	while ((n = write(event_get_fd(remote->event->write),
-		    ((char *)buf) + (sizeof(uint16_t)*2 - partial), partial)) <= 0) {
+		    ((char *)buf) + (RO_HEADER_SIZE - partial), partial)) <= 0) {
 		if (errno == EINTR) continue;
 		if (n == 0) {
 			log_debug("remote", "connection [%s]:%s <-> [%s]:%s was closed",
@@ -83,7 +88,7 @@ remote_prepare_receiving(struct ro_remote *remote, size_t partial)
 	ssize_t n;
 	while ((n = read(event_get_fd(remote->event->read),
 		    (char *)remote->event->partial_header + partial,
-		    sizeof(uint16_t)*2 - partial)) <= 0) {
+		    RO_HEADER_SIZE - partial)) <= 0) {
 		if (errno == EINTR) continue;
 		if (n == 0) {
 			log_debug("remote",
@@ -111,40 +116,45 @@ remote_prepare_receiving(struct ro_remote *remote, size_t partial)
  * not, we disable reading on it and we store it in the remote structure.
  *
  */
-static int
+static void
 remote_splice_in(struct ro_remote *remote)
 {
 	struct ro_local *local = remote->local;
-	if (remote->event->partial_bytes != sizeof(uint16_t)*2) {
+	if (remote->event->partial_bytes != RO_HEADER_SIZE) {
 		/* No header yet */
 		ssize_t n = remote_prepare_receiving(remote, remote->event->partial_bytes);
-		if (n < 0) return -1;
+		if (n < 0) return;
 		if (n == 0) {
 			log_debug("forward",
 			    "[%s]:%s <-> [%s]:%s: no incoming data available, start reading",
 			    remote->laddr, remote->lserv,
 			    remote->raddr, remote->rserv);
 			event_add(remote->event->read, NULL);
-			return 0;
+			return;
 		}
 		remote->event->partial_bytes += n;
-		if (remote->event->partial_bytes == sizeof(uint16_t)*2) {
-			remote->event->partial_header[0] = ntohs(remote->event->partial_header[0]);
-			remote->event->partial_header[1] = ntohs(remote->event->partial_header[1]);
-			if (remote->event->partial_header[0] != local->event->receive_serial + 1) {
+		if (remote->event->partial_bytes == RO_HEADER_SIZE) {
+			memcpy(&remote->event->receive_serial,
+			    remote->event->partial_header,
+			    sizeof(remote->event->receive_serial));
+			remote->event->receive_serial = ntohs(remote->event->receive_serial);
+			memcpy(&remote->event->remaining_bytes,
+			    remote->event->partial_header + sizeof(remote->event->receive_serial),
+			    sizeof(remote->event->remaining_bytes));
+			remote->event->remaining_bytes = ntohl(remote->event->remaining_bytes);
+			if (remote->event->receive_serial != local->event->receive_serial + 1) {
 				/* Not the right remote, stop reading */
 				log_debug("forward",
 				    "[%s]:%s <-> [%s]:%s: "
 				    "serial is %" PRIu16 " while expecting %" PRIu16"; stop reading",
 				    remote->laddr, remote->lserv,
 				    remote->raddr, remote->rserv,
-				    remote->event->partial_header[0],
+				    remote->event->receive_serial,
 				    local->event->receive_serial + 1);
 				event_del(remote->event->read);
-				return 0;
+				return;
 			}
 			local->event->receive_serial++;
-			remote->event->remaining_bytes = remote->event->partial_header[1];
 			local->event->current_send_remote = remote;
 		}
 	}
@@ -167,7 +177,7 @@ remote_splice_in(struct ro_remote *remote)
 				    remote->laddr, remote->lserv,
 				    remote->raddr, remote->rserv);
 				local_destroy(local);
-				return -1;
+				return;
 			}
 			if (errno == EAGAIN || errno == EWOULDBLOCK) {
 				log_debug("forward",
@@ -175,20 +185,28 @@ remote_splice_in(struct ro_remote *remote)
 				    remote->laddr, remote->lserv,
 				    remote->raddr, remote->rserv);
 				event_del(remote->event->read);
-				return 0;
+				return;
 			}
 			if (errno == ENOSYS || errno == EINVAL) {
 				log_warn("remote", "splice not supported, nothing will work");
 				local_destroy(local);
-				return -1;
+				return;
 			}
 			log_warn("remote", "unexpected problem while splicing");
 			local_destroy(local);
-			return -1;
+			return;
 		}
 		remote->stats.in += n;
 		remote->event->remaining_bytes -= n;
 		max -= n;
+
+		/* We put data in the write pipe, let's read it */
+		log_debug("forward",
+		    "[%s]:%s <-> [%s]:%s: put data in the write pipe, start writing on local",
+		    remote->laddr, remote->lserv,
+		    remote->raddr, remote->rserv);
+		event_add(local->event->write, NULL);
+
 		if ((local->event->pipe.nw += n) >= MAX_SPLICE_BYTES) {
 			/* Stop reading, the splice pipe is almost full */
 			log_debug("forward",
@@ -199,13 +217,6 @@ remote_splice_in(struct ro_remote *remote)
 			event_del(remote->event->read);
 			break;
 		}
-
-		/* We put data in the write pipe, let's read it */
-		log_debug("forward",
-		    "[%s]:%s <-> [%s]:%s: put data in the write pipe, start writing on local",
-		    remote->laddr, remote->lserv,
-		    remote->raddr, remote->rserv);
-		event_add(local->event->write, NULL);
 	}
 
 	if (remote->event->remaining_bytes == 0) {
@@ -220,8 +231,8 @@ remote_splice_in(struct ro_remote *remote)
 		event_del(remote->event->read);
 		struct ro_remote *other;
 		TAILQ_FOREACH(other, &local->remotes, next)  {
-			if (other->event->partial_bytes == sizeof(uint16_t) * 2 &&
-			    other->event->partial_header[0] == local->event->receive_serial + 1) {
+			if (other->event->partial_bytes == RO_HEADER_SIZE &&
+			    other->event->receive_serial == local->event->receive_serial + 1) {
 				log_debug("forward",
 				    "[%s]:%s <-> [%s]:%s: next remote, start reading",
 				    other->laddr, other->lserv,
@@ -231,7 +242,7 @@ remote_splice_in(struct ro_remote *remote)
 			}
 		}
 	}
-	return 1;
+	return;
 }
 
 static void
@@ -259,11 +270,12 @@ remote_splice_out(struct ro_local *local)
 			if (remote->connected) break;
 		}
 		log_debug("forward",
-		    "[%s]:%s <-> [%s]:%s: selected as next remote for %zu bytes",
+		    "[%s]:%s <-> [%s]:%s: selected as next remote for %zu bytes (serial %"PRIu16,
 		    remote->laddr, remote->lserv,
 		    remote->raddr, remote->rserv,
-		    local->event->pipe.nr);
-		local->event->partial_bytes = sizeof(uint16_t)*2; /* We need to send the serial + the size */
+		    local->event->pipe.nr,
+		    local->event->send_serial+1);
+		local->event->partial_bytes = RO_HEADER_SIZE;
 		local->event->remaining_bytes = local->event->pipe.nr;
 		local->event->send_serial++;
 		local->event->current_send_remote = remote;
@@ -316,10 +328,12 @@ remote_splice_out(struct ro_local *local)
 			}
 			if (errno == EAGAIN || errno == EWOULDBLOCK) {
 				log_debug("forward",
-				    "[%s]:%s <-> [%s]:%s: currently cannot splice data to remote, start writing",
+				    "[%s]:%s <-> [%s]:%s: currently cannot splice data to remote (%"PRIu32" remaining), "
+				    "start writing",
 				    remote->laddr, remote->lserv,
-				    remote->raddr, remote->rserv);
-				event_del(remote->event->write);
+				    remote->raddr, remote->rserv,
+				    local->event->remaining_bytes);
+				event_add(remote->event->write, NULL);
 				return;
 			}
 			if (errno == ENOSYS || errno == EINVAL) {

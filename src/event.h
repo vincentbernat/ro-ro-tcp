@@ -34,6 +34,8 @@ struct event_private {
 	} signals;
 };
 
+#define RO_HEADER_SIZE (sizeof(uint16_t) + sizeof(uint32_t))
+
 struct local_private {
 	struct event *read;
 	struct event *write;
@@ -46,7 +48,7 @@ struct local_private {
 
 	struct ro_remote *current_send_remote; /* We are currently sending to this remote */
 	struct ro_remote *current_receive_remote; /* We are currently receiving from this remote */
-	uint16_t remaining_bytes;	  /* We need to send this many bytes */
+	uint32_t remaining_bytes;	  /* We need to send this many bytes */
 	size_t partial_bytes;		  /* But before that, we only wrote this many bytes for the header */
 
 	uint16_t send_serial;	 /* Current serial number for sending */
@@ -57,10 +59,11 @@ struct remote_private {
 	struct event *read;
 	struct event *write;
 
-	uint16_t partial_header[2]; /* Partial received header */
+	char partial_header[RO_HEADER_SIZE]; /* Partial received header */
 	size_t partial_bytes;	    /* Size of partially received header */
 
-	uint16_t remaining_bytes; /* We need to receive this many bytes */
+	uint16_t receive_serial;  /* We are receiving this serial */
+	uint32_t remaining_bytes; /* We need to receive this many bytes */
 };
 
 static inline void

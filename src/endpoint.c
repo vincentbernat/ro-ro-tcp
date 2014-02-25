@@ -34,7 +34,7 @@ remote_debug(struct ro_remote *remote)
 	    "  in:        %-10zu bytes   out: %-10zu bytes\n"
 	    "  read:      %-10s       write: %-10s\n"
 	    "  header: %zu (out of %zu)\n"
-	    "  serial: %"PRIu32"\n"
+	    "  serial: %"PRIu16"\n"
 	    "  to receive: %"PRIu32" bytes\n",
 	    remote->laddr, remote->lserv,
 	    remote->raddr, remote->rserv,
@@ -42,8 +42,8 @@ remote_debug(struct ro_remote *remote)
 	    remote->stats.in, remote->stats.out,
 	    event_pending(remote->event->read, EV_READ, NULL)?"wait":"no",
 	    event_pending(remote->event->write, EV_WRITE, NULL)?"wait":"no",
-	    remote->event->partial_bytes, 2*sizeof(uint16_t),
-	    (remote->event->partial_bytes == 2*sizeof(uint16_t))?remote->event->partial_header[0]:0,
+	    remote->event->partial_bytes, RO_HEADER_SIZE,
+	    remote->event->receive_serial,
 	    remote->event->remaining_bytes);
 }
 
@@ -63,7 +63,7 @@ local_debug(struct ro_local *local)
 	    "  write pipe: bytes: %-10zu\n"
 	    "\n"
 	    "  remote: sending [%s]%s%s <-> [%s]%s%s, receiving [%s]%s%s <-> [%s]%s%s\n"
-	    "  serial: sending %"PRIu32", receiving %"PRIu32"\n"
+	    "  serial: sending %"PRIu16", receiving %"PRIu16"\n"
 	    "  to receive: %"PRIu32" bytes (+ %zu bytes of header)\n",
 	    local->addr, local->serv,
 	    local->connected?"yes":"no",
@@ -86,7 +86,7 @@ local_debug(struct ro_local *local)
 	    local->event->current_receive_remote?local->event->current_receive_remote->rserv:"",
 	    local->event->send_serial, local->event->receive_serial,
 	    local->event->remaining_bytes,
-	    2*sizeof(uint16_t) - local->event->partial_bytes);
+	    RO_HEADER_SIZE - local->event->partial_bytes);
 
 	struct ro_remote *remote;
 	TAILQ_FOREACH(remote, &local->remotes, next)
