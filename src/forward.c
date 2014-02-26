@@ -174,6 +174,15 @@ remote_splice_in(struct ro_remote *remote)
 		    remote->event->receive_serial);
 	}
 
+	if (local->event->current_receive_remote != remote) {
+		log_debug("forward",
+		    "[%s]:%s <-> [%s]:%s: not the active remote, pause",
+		    remote->laddr, remote->lserv,
+		    remote->raddr, remote->rserv);
+		event_del(remote->event->read);
+		return;
+	}
+
 	/* Splice data */
 	size_t max = remote->event->remaining_bytes;
 	if (max > MAX_SPLICE_BYTES) max = MAX_SPLICE_BYTES;
