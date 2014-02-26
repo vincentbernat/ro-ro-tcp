@@ -240,10 +240,9 @@ remote_splice_in(struct ro_remote *remote)
 
 		/* Let's enable another remote if possible */
 		log_debug("forward",
-		    "[%s]:%s <-> [%s]:%s: read all data from remote, stop reading",
+		    "[%s]:%s <-> [%s]:%s: read all data from remote, find the next remote",
 		    remote->laddr, remote->lserv,
 		    remote->raddr, remote->rserv);
-		event_del(remote->event->read);
 		struct ro_remote *other;
 		TAILQ_FOREACH(other, &local->remotes, next)  {
 			if (other->event->partial_bytes == RO_HEADER_SIZE &&
