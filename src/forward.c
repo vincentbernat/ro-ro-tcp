@@ -251,7 +251,7 @@ remote_splice_in(struct ro_remote *remote)
 				log_debug("forward",
 				    "[%s]:%s <-> [%s]:%s: next remote, start reading",
 				    other->laddr, other->lserv,
-				    other->raddr, other->laddr);
+				    other->raddr, other->rserv);
 				event_add(other->event->read, NULL);
 				break;
 			}
