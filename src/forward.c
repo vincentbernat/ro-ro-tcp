@@ -184,14 +184,12 @@ remote_splice_in(struct ro_remote *remote)
 	}
 
 	/* Splice data */
-	size_t max = remote->event->remaining_bytes;
-	if (max > MAX_SPLICE_BYTES) max = MAX_SPLICE_BYTES;
-	while (max > 0) {
+	while (remote->event->remaining_bytes > 0) {
 		ssize_t n = splice(event_get_fd(remote->event->read),
 		    NULL,
 		    local->event->pipe.write[1],
 		    NULL,
-		    max,
+		    remote->event->remaining_bytes,
 		    SPLICE_F_MOVE|SPLICE_F_NONBLOCK);
 		if (n <= 0) {
 			if (errno == EINTR) continue;
@@ -222,7 +220,7 @@ remote_splice_in(struct ro_remote *remote)
 		}
 		remote->stats.in += n;
 		remote->event->remaining_bytes -= n;
-		max -= n;
+		local->event->pipe.nw += n;
 
 		/* We put data in the write pipe, let's read it */
 		log_debug("forward",
@@ -230,17 +228,6 @@ remote_splice_in(struct ro_remote *remote)
 		    remote->laddr, remote->lserv,
 		    remote->raddr, remote->rserv);
 		event_add(local->event->write, NULL);
-
-		if ((local->event->pipe.nw += n) >= MAX_SPLICE_BYTES) {
-			/* Stop reading, the splice pipe is almost full */
-			log_debug("forward",
-			    "[%s]:%s <-> [%s]:%s: spliced more than %d bytes, stop reading",
-			    remote->laddr, remote->lserv,
-			    remote->raddr, remote->rserv,
-			    MAX_SPLICE_BYTES);
-			event_del(remote->event->read);
-			break;
-		}
 	}
 
 	if (remote->event->remaining_bytes == 0) {
@@ -436,15 +423,7 @@ local_splice_in(struct ro_local *local)
 			return;
 		}
 		local->stats.out += n;
-		if ((local->event->pipe.nr += n) >= MAX_SPLICE_BYTES) {
-			/* Stop feeding, the splice pipe is almost full */
-			log_debug("forward",
-			    "[%s]:%s: already spliced more than %d bytes, stop reading",
-			    local->addr, local->serv,
-			    MAX_SPLICE_BYTES);
-			event_del(local->event->read);
-			break;
-		}
+		local->event->pipe.nr += n;
 	}
 	/* We should enable remote, but maybe we don't have one yet. */
 	if (local->event->pipe.nr > 0)
