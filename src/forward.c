@@ -263,6 +263,19 @@ remote_splice_in(struct ro_remote *remote)
 static void
 remote_splice_out(struct ro_local *local)
 {
+	if (local->event->pipe.nr == 0) {
+		log_debug("forward",
+		    "[%s]:%s: nothing in read pipe, start reading, disable writing on connected remotes",
+		    local->addr, local->serv);
+		event_add(local->event->read, NULL);
+		struct ro_remote *r;
+		TAILQ_FOREACH(r, &local->remotes, next) {
+			if (r->connected)
+				event_del(r->event->write);
+		}
+		return;
+	}
+
 	/* We need to select a remote */
 	struct ro_remote *remote = local->event->current_send_remote;
 	if (local->event->remaining_bytes == 0) {
@@ -426,7 +439,8 @@ local_splice_in(struct ro_local *local)
 		}
 	}
 	/* We should enable remote, but maybe we don't have one yet. */
-	remote_splice_out(local);
+	if (local->event->pipe.nr > 0)
+		remote_splice_out(local);
 }
 
 static void
