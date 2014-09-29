@@ -17,6 +17,14 @@ bandwidth. A [small video][] made with OpenTTD shows how this works
 A kernel 2.6.27.13 or later is required: `ro-ro-tcp` makes use of data
 splicing and doesn't work around bugs in earlier kernel versions.
 
+Warning
+-------
+
+This is work in progress and currently just doesn't work. Splicing is
+overly complex to handle in a non-blocking way and I had a hard time
+to grasp how it should have worked. The code is published just in case
+but it really doesn't work.
+
 Installation
 ------------
 
