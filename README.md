@@ -23,7 +23,8 @@ Warning
 This is work in progress and currently just doesn't work. Splicing is
 overly complex to handle in a non-blocking way and I had a hard time
 to grasp how it should have worked. The code is published just in case
-but it really doesn't work.
+but it really doesn't work. An implementation of the idea in Go would
+likely solves the issue.
 
 Installation
 ------------
