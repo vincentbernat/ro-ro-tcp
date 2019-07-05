@@ -23,8 +23,11 @@ Warning
 This is work in progress and currently just doesn't work. Splicing is
 overly complex to handle in a non-blocking way and I had a hard time
 to grasp how it should have worked. The code is published just in case
-but it really doesn't work. An implementation of the idea in Go would
-likely solves the issue.
+but it really doesn't work.
+
+[tcpsplicer][] is an implementation of a similar idea in Go.
+
+[tcpsplicer]: https://github.com/pyke369/tcpsplice
 
 Installation
 ------------
