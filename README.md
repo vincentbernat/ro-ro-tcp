@@ -25,9 +25,11 @@ overly complex to handle in a non-blocking way and I had a hard time
 to grasp how it should have worked. The code is published just in case
 but it really doesn't work.
 
-[tcpsplicer][] is an implementation of a similar idea in Go.
+[tcpsplicer][] is an implementation of a similar idea in Go. There is also
+[wdt][] in C++.
 
 [tcpsplicer]: https://github.com/pyke369/tcpsplice
+[wdt]: https://github.com/facebook/wdt
 
 Installation
 ------------
